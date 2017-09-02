@@ -15,17 +15,21 @@ class GambleBot:
         self.slack_client.api_call("chat.postMessage", channel=channel, text=response, as_user=True)
 
     def get_user_input(self, player):
+        timeout = time.time() + 30 
         while(True):
+            if time.time() > timeout:
+                return -1
+            
             username, command, channel = self.parse_slack_output(self.slack_client.rtm_read())
             if(command and channel):
                 if username != None and username == player and command.split()[1] == "roll":
-                    return
+                    return self.game.players[player].roll()
 
     def get_bet_amount(self, initial_amount):
         betted_users = []
         timeout = time.time() + 30   # 30 seconds
         while True:
-            if len(betted_users) == len(self.game.current_players) or time.time() > timeout:
+            if time.time() > timeout:
                 break
             username, command, channel = self.parse_slack_output(self.slack_client.rtm_read())
             if(command and channel):
@@ -35,9 +39,11 @@ class GambleBot:
                         response = username + " has already placed a bet"
                     else:
                         try:
+                            self.game.add_player(username)
                             bet = self.game.players[username].bet(initial_amount)
                             if type(bet) is str:
                                 response = username + " you do not have enough money to place that bet"
+                                self.game.remove_player(username)
                             else:
                                 self.game.current_players[username] = bet
                                 betted_users.append(username)
@@ -59,30 +65,31 @@ class GambleBot:
         response = ""
         if len(command.split()) > 1:
             gamble_command = command.split()[1]
-            if gamble_command == "join":
-                response = self.game.add_player(username)
-
-            elif gamble_command == "start":
+            if gamble_command == "start":
                 if len(command.split()) < 3:
                     response = "Please specify bet amount"
                 else:
                     response = self.game.start()
                     if response == "":
-                        self.post("30 seconds to bet, type 'bet to place bet", channel)
-                        total_pot = self.get_bet_amount(int(command.split()[2]))
-                        for player_name in self.game.players.keys():
-                            response = player_name + "'s turn to roll"
-                            self.post(response, channel)
-                            self.get_user_input(player_name)
-
-                            random_int = self.game.players[player_name].roll()
-                            self.game.update_winner(player_name, random_int)
-                            response = "You rolled " + str(random_int)
-                            self.post(response, channel)
-                            time.sleep(1)
-                        response = "Winner of this round is " + self.game.winning_player_name
-                        self.game.end(total_pot)
-
+                        bet_amount = int(command.split()[2])
+                        self.post(username + " has started a game. Amount to join is $" + str(bet_amount) +
+                                  ".\n 30 seconds to bet, type 'bet' to place bet", channel)
+                        total_pot = self.get_bet_amount(bet_amount)
+                        if len(self.game.current_players) < 1:
+                            response = "Need more players"
+                            self.game.running = False
+                        else: 
+                            for player_name in self.game.players.keys():
+                                response = player_name + "'s turn to roll"
+                                self.post(response, channel)
+                                random_int = self.get_user_input(player_name)
+                                self.game.update_winner(player_name, random_int)
+                                response = "You rolled " + str(random_int)
+                                self.post(response, channel)
+                                time.sleep(1)
+                            response = "Winner of this round is " + self.game.winning_player_name + "\n"
+                            self.game.end(total_pot)
+                            response += self.game.list_score()
             elif gamble_command == "list":
                 response = self.game.list_players()
 
@@ -95,7 +102,7 @@ class GambleBot:
             elif gamble_command == "winnings":
                 response = self.game.list_winning(username)
         else:
-            response="Use 'join' to join the game"
+            response="Use 'start <bet value>' to start the game"
 
         self.post(response, channel)
 
@@ -110,7 +117,6 @@ class GambleBot:
         return None, None, None
 
     def listen(self):
-        READ_WEBSOCKET_DELAY = 1
         if self.slack_client.rtm_connect():
             print("Bot connected and running!")
             while True:
@@ -122,7 +128,7 @@ class GambleBot:
 
 
 if __name__ == "__main__":
-    bot = GambleBot('xoxb-225678114055-iI0n2Z3NWP5a4LIZhS6V8Zdq', 'U6MKY3C1M')
+    bot = GambleBot()
     bot.listen()
 
 
